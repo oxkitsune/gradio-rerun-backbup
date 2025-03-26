@@ -2,6 +2,7 @@ import cv2
 import os
 import tempfile
 import time
+import uuid
 
 import gradio as gr
 from gradio_rerun import Rerun
@@ -61,6 +62,19 @@ def streaming_repeated_blur(img):
         yield stream.read()
 
 
+class RecordingId:
+    def __init__(self):
+        self.value = uuid.uuid4()
+
+    def get_recording(self, application_id: str):
+        return rr.RecordingStream(application_id, recording_id=self.value)
+
+
+class Recording(gr.State):
+    def __init__(self):
+        super().__init__(RecordingId())
+
+
 # However, if you have a workflow that creates an RRD file instead, you can still send it
 # directly to the viewer by simply returning the path to the RRD file.
 #
@@ -86,6 +100,38 @@ def create_cube_rrd(x, y, z, pending_cleanup):
     # and send it to the viewer.
     return temp.name
 
+def streaming_repeated_blur_per_user(recording_id, img):
+    recording = rr.RecordingStream("rerun_example_callbacks", recording_id=recording_id)
+    stream = recording.binary_stream()
+
+    if img is None:
+        raise gr.Error("Must provide an image to blur.")
+
+    blueprint = rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial2DView(origin="image/original"),
+            rrb.Spatial2DView(origin="image/blurred"),
+        ),
+        collapse_panels=True,
+    )
+
+    recording.send_blueprint(blueprint)
+
+    recording.set_time_sequence("iteration", 0)
+
+    recording.log("image/original", rr.Image(img))
+    yield stream.read()
+
+    blur = img
+
+    for i in range(100):
+        recording.set_time_sequence("iteration", i)
+
+        time.sleep(0.1)
+        blur = cv2.GaussianBlur(blur, (5, 5), 0)
+
+        recording.log("image/blurred", rr.Image(blur))
+        yield stream.read()
 
 def cleanup_cube_rrds(pending_cleanup):
     for f in pending_cleanup:
@@ -94,6 +140,8 @@ def cleanup_cube_rrds(pending_cleanup):
 
 with gr.Blocks() as demo:
     with gr.Tab("Streaming"):
+        recording_id = gr.State("streaming_repeated_blur")
+        
         with gr.Row():
             img = gr.Image(interactive=True, label="Image")
             with gr.Column():
@@ -107,7 +155,7 @@ with gr.Blocks() as demo:
                     "selection": "hidden",
                 },
             )
-        stream_blur.click(streaming_repeated_blur, inputs=[img], outputs=[viewer])
+        stream_blur.click(streaming_repeated_blur_per_user, inputs=[recording_id, img], outputs=[viewer])
 
         def on_selection_change(evt: SelectionChange):
             print("selection change", evt.items)
