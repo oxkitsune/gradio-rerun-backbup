@@ -56,13 +56,36 @@ def streaming_repeated_blur(recording_id: str, img):
         yield stream.read()
 
     # Ensure we consume everything from the recording.
-    rec.flush()
+    stream.flush()
     yield stream.read()
 
+Keypoint = tuple[float, float]
+keypoints_per_session_per_sequence_index: dict[str, dict[int, list[Keypoint]]] = {}
 
-def register_keypoint(active_recording_id: str, current_timeline: str, current_time: float, evt: SelectionChange):
-    print("register_keypoint", active_recording_id, current_timeline, current_time, len(evt.items));
-    
+def get_keypoints_for_user_at_sequence_index(request: gr.Request, sequence: int) -> list[Keypoint]:
+    per_sequence = keypoints_per_session_per_sequence_index[request.session_hash]
+    if sequence not in per_sequence:
+        per_sequence[sequence] = []
+
+    return per_sequence[sequence]
+
+
+def initialize_instance(request: gr.Request):
+    keypoints_per_session_per_sequence_index[request.session_hash] = {}
+
+
+def cleanup_instance(request: gr.Request):
+    if request.session_hash in keypoints_per_session_per_sequence_index:
+        del keypoints_per_session_per_sequence_index[request.session_hash]
+
+
+def register_keypoint(
+    active_recording_id: str,
+    current_timeline: str,
+    current_time: float,
+    request: gr.Request,
+    evt: SelectionChange,
+):
     if active_recording_id == "":
         return
 
@@ -84,11 +107,17 @@ def register_keypoint(active_recording_id: str, current_timeline: str, current_t
 
     # We round `current_time` toward 0, because that gives us the sequence index
     # that the user is currently looking at, due to the Viewer's latest-at semantics.
-    rec.set_time("iteration", sequence=math.floor(current_time))
-    rec.log(f"{item.entity_path}/keypoint", rr.Points2D(item.position[0:2], radii=5))
+    index = math.floor(current_time)
+
+    # We keep track of the keypoints per sequence index for each user manually.
+    keypoints = get_keypoints_for_user_at_sequence_index(request, index)
+    keypoints.append(item.position[0:2])
+
+    rec.set_time("iteration", sequence=index)
+    rec.log(f"{item.entity_path}/keypoint", rr.Points2D(keypoints, radii=2))
 
     # Ensure we consume everything from the recording.
-    rec.flush()
+    stream.flush()
     yield stream.read()
 
 def track_current_time(evt: TimeUpdate):
@@ -123,6 +152,9 @@ with gr.Blocks() as demo:
         viewer.selection_change(register_keypoint, inputs=[recording_id, current_timeline, current_time], outputs=[viewer])
         viewer.time_update(track_current_time, outputs=[current_time])
         viewer.timeline_change(track_current_timeline_and_time, outputs=[current_timeline, current_time])
+
+    demo.load(initialize_instance)
+    demo.close(cleanup_instance)
 
 
 if __name__ == "__main__":
