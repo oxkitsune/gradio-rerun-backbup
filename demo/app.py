@@ -101,7 +101,10 @@ def cleanup_instance(request: gr.Request):
         del keypoints_per_session_per_sequence_index[request.session_hash]
 
 
-# In this function, the `request` parameter is automatically injecte by Gradio when this event listener is fired.
+# In this function, the `request` and `evt` parameters will be automatically injected by Gradio when this event listener is fired.
+#
+# `SelectionChange` is a subclass of `EventData`: https://www.gradio.app/docs/gradio/eventdata
+# `gr.Request`: https://www.gradio.app/main/docs/gradio/request
 def register_keypoint(
     active_recording_id: str,
     current_timeline: str,
@@ -210,9 +213,10 @@ with gr.Blocks() as demo:
         current_timeline = gr.State("")
         current_time = gr.State(0.0)
 
-        # When registering the event listeners, we pass the `recording_id` in as input in order to create a recording stream,
+        # When registering the event listeners, we pass the `recording_id` in as input in order to create a recording stream
         # using that id.
         stream_blur.click(
+            # Using the `viewer` as an output allows us to stream data to it by yielding bytes from the callback.
             streaming_repeated_blur, inputs=[recording_id, img], outputs=[viewer]
         )
         viewer.selection_change(
